@@ -1,0 +1,32 @@
+@import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500&family=Inter:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html { scroll-behavior: smooth; }
+
+body {
+  background-color: #EDE6D6;
+  color: #2A2420;
+  font-family: 'Inter', sans-serif;
+}
+
+h1, h2, h3, h4, .font-display { font-family: 'Fraunces', serif; }
+
+::selection { background-color: #D9A441; color: #2A2420; }
+
+.woven-divider {
+  height: 10px;
+  background-image: repeating-linear-gradient(45deg, #B5651D 0px, #B5651D 6px, transparent 6px, transparent 12px);
+  opacity: 0.5;
+}
+
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
+  outline: 2px solid #2F4A3B;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
+}
