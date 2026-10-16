@@ -1,7 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { isFirebaseConfigured } from '../firebase';
 
 export default function Login() {
   const { user, login } = useAuth();
@@ -36,11 +35,6 @@ export default function Login() {
         Log in to see your bookings, or <Link to="/signup" className="text-clay underline">create an account</Link>.
       </p>
 
-      {!isFirebaseConfigured() && (
-        <p className="text-sm bg-marigold/20 border border-marigold rounded-sm px-4 py-3 mb-6">
-          Firebase isn't configured yet, so sign-in won't work until a real project is connected.
-        </p>
-      )}
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>

@@ -1,15 +1,16 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import { format, differenceInCalendarDays } from 'date-fns';
 import BookingCalendar from '../components/BookingCalendar';
-import { createBooking } from '../api/booking';
+import { createBooking, getAvailability } from '../api/booking';
 
 const roomTypes = [
-  { id: 'farm', label: 'Farm Retreat Rooms', sub: '3 rooms · 5 min walk from main house' },
-  { id: 'main', label: 'Main House Rooms', sub: '5 rooms · within the main compound' },
+  { id: 'farm-retreat', label: 'Farm Retreat Rooms', sub: '3 rooms · 5 min walk from main house' },
+  { id: 'main-house', label: 'Main House Rooms', sub: '5 rooms · within the main compound' },
 ];
 
 export default function BookNow() {
-  const [roomType, setRoomType] = useState('farm');
+  const [roomType, setRoomType] = useState('farm-retreat');
   const [checkIn, setCheckIn] = useState(null);
   const [checkOut, setCheckOut] = useState(null);
   const [guests, setGuests] = useState(2);
@@ -17,6 +18,20 @@ export default function BookNow() {
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
+  const [bookedRanges, setBookedRanges] = useState([]);
+  const [availabilityError, setAvailabilityError] = useState(false);
+  const { i18n } = useTranslation();
+
+  useEffect(() => {
+    let alive = true;
+    setCheckIn(null);
+    setCheckOut(null);
+    setAvailabilityError(false);
+    getAvailability(roomType)
+      .then((r) => { if (alive) setBookedRanges(r.bookedRanges); })
+      .catch(() => { if (alive) { setBookedRanges([]); setAvailabilityError(true); } });
+    return () => { alive = false; };
+  }, [roomType]);
 
   const nights = checkIn && checkOut ? differenceInCalendarDays(checkOut, checkIn) : 0;
 
@@ -27,10 +42,11 @@ export default function BookNow() {
     setError(null);
     try {
       const result = await createBooking({
-        roomType,
-        checkIn: checkIn.toISOString(),
-        checkOut: checkOut.toISOString(),
+        roomTypeId: roomType,
+        checkIn,
+        checkOut,
         guests,
+        language: i18n.language === 'ne' ? 'ne' : 'en',
         guestName: form.name,
         guestEmail: form.email,
         guestPhone: form.phone,
@@ -41,7 +57,9 @@ export default function BookNow() {
       } else {
         setError(result.error === 'DATES_UNAVAILABLE'
           ? "Sorry, those dates just became unavailable. Please pick different dates."
-          : 'Something went wrong sending your request. Please try again.');
+          : result.error === 'NETWORK' || result.error.startsWith('HTTP_5')
+            ? 'Something went wrong sending your request. Please try again.'
+            : result.message || 'Something went wrong sending your request. Please try again.');
       }
     } catch (err) {
       setError('Something went wrong sending your request. Please try again.');
@@ -92,8 +110,12 @@ export default function BookNow() {
           <BookingCalendar
             checkIn={checkIn}
             checkOut={checkOut}
+            bookedRanges={bookedRanges}
             onSelect={(a, b) => { setCheckIn(a); setCheckOut(b); }}
           />
+          {availabilityError && (
+            <p className="text-sm text-red-700 mt-3" role="alert">Could not load availability. You can still send a request and we will check the dates.</p>
+          )}
           {checkIn && (
             <p className="text-sm mt-3">
               <span className="font-medium">{format(checkIn, 'd MMM yyyy')}</span>
@@ -105,7 +127,7 @@ export default function BookNow() {
         <div>
           <label className="block text-sm font-medium mb-2">Guests</label>
           <input
-            type="number" min={1} max={12} value={guests}
+            type="number" min={1} max={20} value={guests}
             onChange={(e) => setGuests(Number(e.target.value))}
             className="w-full border border-ink/20 rounded-sm px-4 py-2.5 mb-6 bg-white/60"
           />

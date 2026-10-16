@@ -14,7 +14,7 @@ import BookNow from './pages/BookNow';
 import Contact from './pages/Contact';
 import ProtectedRoute from './components/ProtectedRoute';
 
-// Lazy-loaded: these pull in firebase/auth + firebase/firestore, which guests
+// Lazy-loaded: account and admin pages that guests
 // just browsing the public site never need to download.
 const AdminLogin = lazy(() => import('./pages/Admin/Login'));
 const AdminDashboard = lazy(() => import('./pages/Admin/Dashboard'));

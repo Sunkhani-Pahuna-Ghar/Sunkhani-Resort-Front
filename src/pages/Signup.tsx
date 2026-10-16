@@ -1,8 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { Link, Navigate, useNavigate } from 'react-router-dom';
-import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { useAuth } from '../context/AuthContext';
-import { auth, db, isFirebaseConfigured } from '../firebase';
+import { ApiError } from '../api/client';
 
 export default function Signup() {
   const { user, signup } = useAuth();
@@ -22,19 +21,14 @@ export default function Signup() {
     setError(null);
     setSubmitting(true);
     try {
-      await signup(email, password);
-      // Save the display name as a profile document. auth.currentUser is set
-      // synchronously right after signup resolves.
-      if (db && auth?.currentUser) {
-        await setDoc(doc(db, 'users', auth.currentUser.uid), {
-          name,
-          email,
-          createdAt: serverTimestamp(),
-        });
-      }
+      await signup(email, password, name);
       navigate('/account');
-    } catch {
-      setError('Could not create your account. That email may already be in use.');
+    } catch (err) {
+      setError(
+        err instanceof ApiError && err.status > 0 && err.status < 500
+          ? err.message
+          : 'Could not create your account. Please try again.',
+      );
     } finally {
       setSubmitting(false);
     }
@@ -47,12 +41,6 @@ export default function Signup() {
         Already have one? <Link to="/login" className="text-clay underline">Sign in</Link>.
       </p>
 
-      {!isFirebaseConfigured() && (
-        <p className="text-sm bg-marigold/20 border border-marigold rounded-sm px-4 py-3 mb-6">
-          Firebase isn't configured yet, so account creation won't work until a real project is
-          connected.
-        </p>
-      )}
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
@@ -75,11 +63,12 @@ export default function Signup() {
           />
         </div>
         <div>
-          <label className="block text-sm font-medium mb-2">Password</label>
+          <label className="block text-sm font-medium mb-2">Password <span className="text-ink-light font-normal">(at least 8 characters)</span></label>
           <input
             type="password"
             required
-            minLength={6}
+            minLength={8}
+            maxLength={72}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             className="w-full border border-ink/20 rounded-sm px-4 py-2.5 bg-white/60"

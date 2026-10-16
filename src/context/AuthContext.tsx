@@ -1,84 +1,97 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
-import {
-  onAuthStateChanged,
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  signOut,
-  type User,
-} from 'firebase/auth';
-import { auth, isFirebaseConfigured } from '../firebase';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { request, getToken, setToken, AUTH_EXPIRED_EVENT } from "../api/client";
 
-interface AuthContextValue {
-  user: User | null;
-  // True only when the signed-in account holds the real "admin" custom claim
-  // (see functions/scripts/setAdminClaim.js) -- NOT just "is someone logged in".
-  // A registered guest has `user` set but `isAdmin` false.
-  isAdmin: boolean;
-  loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
-  signup: (email: string, password: string) => Promise<void>;
-  logout: () => Promise<void>;
+export interface AuthUser {
+  id: string;
+  email: string;
+  firstName: string;
+  lastName: string;
+  role: "GUEST" | "ADMIN";
 }
 
-const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+interface AuthResponse {
+  accessToken: string;
+  user: AuthUser;
+}
+
+interface AuthContextValue {
+  user: AuthUser | null;
+  isAdmin: boolean;
+  loading: boolean;
+  login: (email: string, password: string) => Promise<AuthUser>;
+  signup: (email: string, password: string, name?: string) => Promise<AuthUser>;
+  logout: () => void;
+}
+
+const AuthContext = createContext<AuthContextValue | null>(null);
+
+function splitName(name?: string): { firstName?: string; lastName?: string } {
+  const parts = (name ?? "").trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return {};
+  const rest = parts.slice(1).join(" ");
+  return rest ? { firstName: parts[0], lastName: rest } : { firstName: parts[0] };
+}
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [isAdmin, setIsAdmin] = useState(false);
-  // If Firebase isn't configured yet, don't show an infinite loading state --
-  // just treat everyone as "signed out" so login/signup pages render.
-  const [loading, setLoading] = useState(isFirebaseConfigured());
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [loading, setLoading] = useState<boolean>(() => !!getToken());
 
   useEffect(() => {
-    if (!isFirebaseConfigured() || !auth) {
-      setLoading(false);
-      return;
-    }
-    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      setUser(firebaseUser);
-      if (firebaseUser) {
-        // Custom claims live on the ID token, not the user object itself,
-        // so they have to be read this way -- refreshed on every sign-in.
-        const tokenResult = await firebaseUser.getIdTokenResult();
-        setIsAdmin(tokenResult.claims.admin === true);
-      } else {
-        setIsAdmin(false);
-      }
-      setLoading(false);
-    });
-    return unsubscribe;
+    if (!getToken()) return;
+    let alive = true;
+    request<AuthUser>("/auth/me")
+      .then((u) => alive && setUser(u))
+      .catch(() => alive && setUser(null))
+      .finally(() => alive && setLoading(false));
+    return () => {
+      alive = false;
+    };
   }, []);
 
-  const login = async (email: string, password: string) => {
-    if (!isFirebaseConfigured() || !auth) {
-      throw new Error('Firebase is not configured yet. Add your project config to .env first.');
-    }
-    await signInWithEmailAndPassword(auth, email, password);
+  useEffect(() => {
+    const onExpired = () => setUser(null);
+    window.addEventListener(AUTH_EXPIRED_EVENT, onExpired);
+    return () => window.removeEventListener(AUTH_EXPIRED_EVENT, onExpired);
+  }, []);
+
+  const finish = (r: AuthResponse) => {
+    setToken(r.accessToken);
+    setUser(r.user);
+    return r.user;
   };
 
-  const signup = async (email: string, password: string) => {
-    if (!isFirebaseConfigured() || !auth) {
-      throw new Error('Firebase is not configured yet. Add your project config to .env first.');
-    }
-    await createUserWithEmailAndPassword(auth, email, password);
-  };
-
-  const logout = async () => {
-    if (!auth) return;
-    await signOut(auth);
-  };
-
-  return (
-    <AuthContext.Provider value={{ user, isAdmin, loading, login, signup, logout }}>
-      {children}
-    </AuthContext.Provider>
+  const login = useCallback(
+    async (email: string, password: string) =>
+      finish(await request<AuthResponse>("/auth/login", { method: "POST", body: { email, password }, auth: false })),
+    [],
   );
+
+  const signup = useCallback(
+    async (email: string, password: string, name?: string) =>
+      finish(
+        await request<AuthResponse>("/auth/register", {
+          method: "POST",
+          body: { email, password, ...splitName(name) },
+          auth: false,
+        }),
+      ),
+    [],
+  );
+
+  const logout = useCallback(() => {
+    setToken(null);
+    setUser(null);
+  }, []);
+
+  const value = useMemo(
+    () => ({ user, isAdmin: user?.role === "ADMIN", loading, login, signup, logout }),
+    [user, loading, login, signup, logout],
+  );
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export function useAuth(): AuthContextValue {
   const ctx = useContext(AuthContext);
-  if (!ctx) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
+  if (!ctx) throw new Error("useAuth must be used inside <AuthProvider>");
   return ctx;
 }

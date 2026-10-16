@@ -1,47 +1,13 @@
 import { useEffect, useState } from 'react';
-import {
-  collection,
-  onSnapshot,
-  orderBy,
-  query,
-  type Timestamp,
-} from 'firebase/firestore';
-import { db, isFirebaseConfigured } from '../../firebase';
+import { parseISO } from 'date-fns';
 import { useAuth } from '../../context/AuthContext';
-import { updateBookingStatus } from '../../api/booking';
-import { ROOM_TYPE_LABELS, type Booking, type Inquiry } from '../../types';
+import { getAdminBookings, getAdminInquiries, updateBookingStatus } from '../../api/booking';
+import { ROOM_TYPE_LABELS, STATUS_STYLES, type Booking, type BookingStatus, type Inquiry } from '../../types';
 
 type Tab = 'bookings' | 'messages';
 
-// Firestore gives back Timestamp objects; this converts a raw snapshot doc into
-// our typed Booking/Inquiry shape with plain JS Dates.
-function toBooking(id: string, data: Record<string, unknown>): Booking {
-  return {
-    id,
-    roomTypeId: data.roomTypeId as Booking['roomTypeId'],
-    checkIn: (data.checkIn as Timestamp).toDate(),
-    checkOut: (data.checkOut as Timestamp).toDate(),
-    guests: Number(data.guests) || 1,
-    guestName: String(data.guestName || ''),
-    guestEmail: String(data.guestEmail || ''),
-    guestPhone: String(data.guestPhone || ''),
-    notes: String(data.notes || ''),
-    status: data.status as Booking['status'],
-    createdAt: (data.createdAt as Timestamp)?.toDate?.() ?? new Date(),
-    language: (data.language as Booking['language']) || 'en',
-  };
-}
-
-function toInquiry(id: string, data: Record<string, unknown>): Inquiry {
-  return {
-    id,
-    name: String(data.name || ''),
-    email: String(data.email || ''),
-    message: String(data.message || ''),
-    status: (data.status as Inquiry['status']) || 'new',
-    createdAt: (data.createdAt as Timestamp)?.toDate?.() ?? new Date(),
-  };
-}
+const day = (s: string) => parseISO(s).toLocaleDateString();
+const POLL_MS = 20000;
 
 export default function AdminDashboard() {
   const { logout } = useAuth();
@@ -50,29 +16,30 @@ export default function AdminDashboard() {
   const [inquiries, setInquiries] = useState<Inquiry[]>([]);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
 
+  const [loadError, setLoadError] = useState(false);
+
+  const load = () =>
+    Promise.all([getAdminBookings(), getAdminInquiries()])
+      .then(([b, i]) => { setBookings(b as Booking[]); setInquiries(i as Inquiry[]); setLoadError(false); })
+      .catch(() => setLoadError(true));
+
   useEffect(() => {
-    if (!isFirebaseConfigured() || !db) return;
-
-    const bookingsQuery = query(collection(db, 'bookings'), orderBy('createdAt', 'desc'));
-    const unsubBookings = onSnapshot(bookingsQuery, (snapshot) => {
-      setBookings(snapshot.docs.map((d) => toBooking(d.id, d.data())));
-    });
-
-    const inquiriesQuery = query(collection(db, 'inquiries'), orderBy('createdAt', 'desc'));
-    const unsubInquiries = onSnapshot(inquiriesQuery, (snapshot) => {
-      setInquiries(snapshot.docs.map((d) => toInquiry(d.id, d.data())));
-    });
-
-    return () => {
-      unsubBookings();
-      unsubInquiries();
-    };
+    load();
+    const timer = setInterval(load, POLL_MS);
+    return () => clearInterval(timer);
   }, []);
 
-  const handleStatusChange = async (bookingId: string, status: 'confirmed' | 'declined') => {
+  const handleStatusChange = async (bookingId: string, status: BookingStatus) => {
+    if (status === 'cancelled' && !window.confirm('Cancel this confirmed booking? The dates will become available again.')) return;
     setUpdatingId(bookingId);
     try {
-      await updateBookingStatus(bookingId, status);
+      const result = await updateBookingStatus(bookingId, status);
+      if (!result.success) {
+        alert(result.error === 'DATES_UNAVAILABLE'
+          ? 'Those dates overlap another confirmed booking, so this one cannot be confirmed.'
+          : result.message || 'Something went wrong updating that booking.');
+      }
+      await load();
     } catch {
       alert('Something went wrong updating that booking. Please try again.');
     } finally {
@@ -97,11 +64,8 @@ export default function AdminDashboard() {
         </button>
       </div>
 
-      {!isFirebaseConfigured() && (
-        <p className="text-sm bg-marigold/20 border border-marigold rounded-sm px-4 py-3 mb-8">
-          Firebase isn't configured yet — this dashboard will stay empty until a real project is
-          connected (see README.md).
-        </p>
+      {loadError && (
+        <p className="text-sm text-red-700 mb-6" role="alert">Could not refresh data. Retrying…</p>
       )}
 
       <div className="flex gap-2 mb-8">
@@ -133,23 +97,17 @@ export default function AdminDashboard() {
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
                   <p className="font-medium">{b.guestName}</p>
-                  <p className="text-sm text-ink-light">{b.guestEmail} {b.guestPhone && `· ${b.guestPhone}`}</p>
+                  <p className="text-sm text-ink-light">{b.guestEmail} {b.guestPhone ? `· ${b.guestPhone}` : ''}</p>
                   <p className="text-sm mt-2">
                     {ROOM_TYPE_LABELS[b.roomTypeId] || b.roomTypeId} ·{' '}
-                    {b.checkIn.toLocaleDateString()} → {b.checkOut.toLocaleDateString()} ·{' '}
+                    {day(b.checkIn)} → {day(b.checkOut)} ·{' '}
                     {b.guests} guest{b.guests !== 1 ? 's' : ''}
                   </p>
                   {b.notes && <p className="text-sm text-ink-light mt-2 italic">"{b.notes}"</p>}
                 </div>
                 <div className="flex flex-col items-end gap-2 shrink-0">
                   <span
-                    className={`text-xs font-medium px-3 py-1 rounded-full ${
-                      b.status === 'confirmed'
-                        ? 'bg-pine/15 text-pine'
-                        : b.status === 'declined'
-                        ? 'bg-red-100 text-red-700'
-                        : 'bg-marigold/20 text-clay-dark'
-                    }`}
+                    className={`text-xs font-medium px-3 py-1 rounded-full ${STATUS_STYLES[b.status] ?? STATUS_STYLES.pending}`}
                   >
                     {b.status}
                   </span>
@@ -171,6 +129,15 @@ export default function AdminDashboard() {
                       </button>
                     </div>
                   )}
+                  {b.status === 'confirmed' && (
+                    <button
+                      onClick={() => handleStatusChange(b.id, 'cancelled')}
+                      disabled={updatingId === b.id}
+                      className="text-xs font-semibold border border-ink/20 px-3 py-1.5 rounded-full hover:border-red-400 hover:text-red-700 transition-colors disabled:opacity-40"
+                    >
+                      Cancel booking
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -188,7 +155,7 @@ export default function AdminDashboard() {
               <p className="font-medium">{i.name}</p>
               <p className="text-sm text-ink-light">{i.email}</p>
               <p className="text-sm mt-2">{i.message}</p>
-              <p className="text-xs text-ink-light mt-2">{i.createdAt.toLocaleString()}</p>
+              <p className="text-xs text-ink-light mt-2">{new Date(i.createdAt).toLocaleString()}</p>
             </div>
           ))}
         </div>
